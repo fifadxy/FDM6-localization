@@ -12,27 +12,20 @@ permissions:
 jobs:
   build:
     name: Build Hisingen China
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
+      - name: Verify macOS 26 Xcode toolchain
         shell: bash
         run: |
           set -euo pipefail
-          if [ -d /Applications/Xcode_16.4.app/Contents/Developer ]; then
-            sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
-          elif [ -d /Applications/Xcode.app/Contents/Developer ]; then
-            sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-          else
-            XCODE_APP="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort | tail -1)"
-            test -n "$XCODE_APP"
-            sudo xcode-select -s "$XCODE_APP/Contents/Developer"
-          fi
+          echo "Developer directory: $(xcode-select -p)"
           xcodebuild -version
           swift --version
+          xcrun --sdk macosx --show-sdk-path
 
       - name: Clone upstream
         shell: bash
@@ -171,6 +164,29 @@ jobs:
           NOTARIZE: never
         run: |
           set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("Sources/Hisingen/UI/Controls/AccessControlsCard.swift")
+          s = p.read_text(encoding="utf-8")
+          old = '''        switch state.exteriorStatus?.isLocked {
+          case true: return "lock.open.fill"
+          case false: return "lock.fill"
+          case nil: return "questionmark.circle"
+          }'''
+          new = '''        switch state.exteriorStatus?.isLocked {
+          case .some(true): return "lock.open.fill"
+          case .some(false): return "lock.fill"
+          case .none: return "questionmark.circle"
+          }'''
+          if old in s:
+              p.write_text(s.replace(old, new, 1), encoding="utf-8")
+              print("Patched Optional Bool switch for current Swift compiler")
+          else:
+              print("Optional Bool switch already compatible or source changed")
+          PY
+
           rm -rf .build
           swift package resolve
           NOTARIZE=never make app
