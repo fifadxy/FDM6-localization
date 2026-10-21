@@ -1,0 +1,255 @@
+name: Build Hisingen China Fast
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "chatgpt/hisingen-china-build-0.16.0"
+    paths:
+      - ".github/workflows/build-hisingen-china-fast.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout temporary branch
+        uses: actions/checkout@v4
+
+      - name: Select full Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d /Applications/Xcode_16.4.app/Contents/Developer ]; then
+            sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          elif [ -d /Applications/Xcode.app/Contents/Developer ]; then
+            sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          else
+            XCODE_APP="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort | tail -1)"
+            test -n "$XCODE_APP"
+            sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          fi
+          xcodebuild -version
+          swift --version
+          xcrun --sdk macosx --show-sdk-path
+
+      - name: Clone Hisingen
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v2.0.10 \
+            https://github.com/NicolasKheirallah/Hisingen.git \
+            "$RUNNER_TEMP/Hisingen"
+
+      - name: Add China Polestar region UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPDIR="$RUNNER_TEMP/Hisingen/Sources/Hisingen/App"
+
+          cat > "$APPDIR/ChinaPolestarRegionController.swift" <<'SWIFT'
+import AppKit
+import Foundation
+import WebKit
+
+@MainActor
+final class ChinaPolestarRegionController: NSObject, WKNavigationDelegate {
+    private static let shared = ChinaPolestarRegionController()
+    private static let defaultsKey = "hisingen.polestar.signInRegion"
+
+    private var webWindow: NSWindow?
+    private var webView: WKWebView?
+
+    static func install() {
+        shared.installMenuItem()
+        if UserDefaults.standard.object(forKey: defaultsKey) == nil {
+            UserDefaults.standard.set("global", forKey: defaultsKey)
+        }
+    }
+
+    private func installMenuItem() {
+        guard let appMenu = NSApp.mainMenu?.items.first?.submenu else { return }
+        if appMenu.items.contains(where: { $0.title == "Polestar Sign-In Region…" }) {
+            return
+        }
+
+        let item = NSMenuItem(
+            title: "Polestar Sign-In Region…",
+            action: #selector(openRegionChooser(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+
+        let settingsIndex = appMenu.items.firstIndex {
+            ["Settings…", "Settings...", "Preferences…", "Preferences..."].contains($0.title)
+        }
+        appMenu.insertItem(item, at: settingsIndex.map { $0 + 1 } ?? 0)
+    }
+
+    @objc private func openRegionChooser(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.messageText = "Polestar Sign-In Region"
+        alert.informativeText =
+            "Global keeps Hisingen's original Polestar sign-in. " +
+            "China opens the official Polestar China website. " +
+            "Website sign-in is not treated as a verified China vehicle API session."
+        alert.addButton(withTitle: "Global Polestar ID")
+        alert.addButton(withTitle: "China Polestar ID · Official Web Sign-In")
+        alert.addButton(withTitle: "Cancel")
+
+        let result = alert.runModal()
+        if result == .alertFirstButtonReturn {
+            selectGlobal()
+        } else if result == .alertSecondButtonReturn {
+            selectChina()
+        }
+    }
+
+    private func selectGlobal() {
+        UserDefaults.standard.set("global", forKey: Self.defaultsKey)
+        guard let root = NSApp.mainMenu else { return }
+        if let settings = findMenuItem(
+            in: root,
+            titles: ["Settings…", "Settings...", "Preferences…", "Preferences..."]
+        ), let action = settings.action {
+            _ = NSApp.sendAction(action, to: settings.target, from: settings)
+        }
+    }
+
+    private func selectChina() {
+        UserDefaults.standard.set("chinaOfficialWeb", forKey: Self.defaultsKey)
+        openChinaWindow()
+    }
+
+    private func openChinaWindow() {
+        if let window = webWindow {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+
+        let view = WKWebView(
+            frame: NSRect(x: 0, y: 0, width: 720, height: 820),
+            configuration: configuration
+        )
+        view.navigationDelegate = self
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 820),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "China Polestar ID · Official Web Sign-In"
+        window.contentView = view
+        window.center()
+        window.isReleasedWhenClosed = false
+
+        self.webView = view
+        self.webWindow = window
+
+        let url = URL(string: "https://www.polestar.cn/zh-cn/auth/login/")!
+        view.load(URLRequest(url: url))
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func findMenuItem(in menu: NSMenu, titles: [String]) -> NSMenuItem? {
+        for item in menu.items {
+            if titles.contains(item.title) { return item }
+            if let submenu = item.submenu,
+               let found = findMenuItem(in: submenu, titles: titles) {
+                return found
+            }
+        }
+        return nil
+    }
+}
+SWIFT
+
+          python3 - <<'PY'
+from pathlib import Path
+
+path = Path("$RUNNER_TEMP/Hisingen/Sources/Hisingen/App/AppDelegate.swift")
+text = path.read_text(encoding="utf-8")
+needle = "        mainMenuController.install()\n"
+replacement = needle + "        ChinaPolestarRegionController.install()\n"
+
+if "ChinaPolestarRegionController.install()" not in text:
+    if needle not in text:
+        raise SystemExit("Could not find mainMenuController.install() in AppDelegate.swift")
+    text = text.replace(needle, replacement, 1)
+    path.write_text(text, encoding="utf-8")
+
+print("China region hook installed")
+PY
+
+          grep -n "ChinaPolestarRegionController.install" \
+            "$RUNNER_TEMP/Hisingen/Sources/Hisingen/App/AppDelegate.swift"
+          grep -n "www.polestar.cn/zh-cn/auth/login" \
+            "$APPDIR/ChinaPolestarRegionController.swift"
+
+      - name: Resolve packages
+        working-directory: ${{ runner.temp }}/Hisingen
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .build
+          swift package resolve
+
+      - name: Build native Hisingen app
+        working-directory: ${{ runner.temp }}/Hisingen
+        shell: bash
+        env:
+          NOTARIZE: never
+        run: |
+          set -euo pipefail
+          NOTARIZE=never make app
+          test -d releases/Hisingen.app
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIST="$RUNNER_TEMP/dist"
+          mkdir -p "$DIST"
+          cp -R "$RUNNER_TEMP/Hisingen/releases/Hisingen.app" \
+            "$DIST/Hisingen China.app"
+
+          codesign --force --deep --sign - "$DIST/Hisingen China.app"
+          codesign --verify --deep --strict --verbose=2 "$DIST/Hisingen China.app"
+
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
+            "$DIST/Hisingen China.app" \
+            "$DIST/Hisingen-China.app.zip"
+
+          cd "$DIST"
+          shasum -a 256 Hisingen-China.app.zip > SHA256SUMS.txt
+
+          cat > BUILD_INFO.txt <<INFO
+Hisingen upstream: v2.0.10
+Patch: China Polestar ID Official Web Sign-In fast build
+Runner: macos-15
+Xcode: $(xcodebuild -version | tr '\n' ' ')
+Regions: Global Polestar ID / China Polestar ID Official Web Sign-In
+China login: https://www.polestar.cn/zh-cn/auth/login/
+China vehicle API session: not verified by this website sign-in flow
+INFO
+
+      - name: Upload macOS app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hisingen-China-macOS
+          path: |
+            ${{ runner.temp }}/dist/Hisingen-China.app.zip
+            ${{ runner.temp }}/dist/SHA256SUMS.txt
+            ${{ runner.temp }}/dist/BUILD_INFO.txt
+          if-no-files-found: error
+          retention-days: 7
