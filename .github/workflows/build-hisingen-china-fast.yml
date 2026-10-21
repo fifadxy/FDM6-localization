@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   build:
+    name: Build native macOS app
     runs-on: macos-15
     timeout-minutes: 45
 
@@ -52,144 +53,145 @@ jobs:
           APPDIR="$RUNNER_TEMP/Hisingen/Sources/Hisingen/App"
 
           cat > "$APPDIR/ChinaPolestarRegionController.swift" <<'SWIFT'
-import AppKit
-import Foundation
-import WebKit
+          import AppKit
+          import Foundation
+          import WebKit
 
-@MainActor
-final class ChinaPolestarRegionController: NSObject, WKNavigationDelegate {
-    private static let shared = ChinaPolestarRegionController()
-    private static let defaultsKey = "hisingen.polestar.signInRegion"
+          @MainActor
+          final class ChinaPolestarRegionController: NSObject, WKNavigationDelegate {
+              private static let shared = ChinaPolestarRegionController()
+              private static let defaultsKey = "hisingen.polestar.signInRegion"
 
-    private var webWindow: NSWindow?
-    private var webView: WKWebView?
+              private var webWindow: NSWindow?
+              private var webView: WKWebView?
 
-    static func install() {
-        shared.installMenuItem()
-        if UserDefaults.standard.object(forKey: defaultsKey) == nil {
-            UserDefaults.standard.set("global", forKey: defaultsKey)
-        }
-    }
+              static func install() {
+                  shared.installMenuItem()
+                  if UserDefaults.standard.object(forKey: defaultsKey) == nil {
+                      UserDefaults.standard.set("global", forKey: defaultsKey)
+                  }
+              }
 
-    private func installMenuItem() {
-        guard let appMenu = NSApp.mainMenu?.items.first?.submenu else { return }
-        if appMenu.items.contains(where: { $0.title == "Polestar Sign-In Region…" }) {
-            return
-        }
+              private func installMenuItem() {
+                  guard let appMenu = NSApp.mainMenu?.items.first?.submenu else { return }
+                  if appMenu.items.contains(where: { $0.title == "Polestar Sign-In Region…" }) {
+                      return
+                  }
 
-        let item = NSMenuItem(
-            title: "Polestar Sign-In Region…",
-            action: #selector(openRegionChooser(_:)),
-            keyEquivalent: ""
-        )
-        item.target = self
+                  let item = NSMenuItem(
+                      title: "Polestar Sign-In Region…",
+                      action: #selector(openRegionChooser(_:)),
+                      keyEquivalent: ""
+                  )
+                  item.target = self
 
-        let settingsIndex = appMenu.items.firstIndex {
-            ["Settings…", "Settings...", "Preferences…", "Preferences..."].contains($0.title)
-        }
-        appMenu.insertItem(item, at: settingsIndex.map { $0 + 1 } ?? 0)
-    }
+                  let settingsIndex = appMenu.items.firstIndex {
+                      ["Settings…", "Settings...", "Preferences…", "Preferences..."].contains($0.title)
+                  }
+                  appMenu.insertItem(item, at: settingsIndex.map { $0 + 1 } ?? 0)
+              }
 
-    @objc private func openRegionChooser(_ sender: Any?) {
-        let alert = NSAlert()
-        alert.messageText = "Polestar Sign-In Region"
-        alert.informativeText =
-            "Global keeps Hisingen's original Polestar sign-in. " +
-            "China opens the official Polestar China website. " +
-            "Website sign-in is not treated as a verified China vehicle API session."
-        alert.addButton(withTitle: "Global Polestar ID")
-        alert.addButton(withTitle: "China Polestar ID · Official Web Sign-In")
-        alert.addButton(withTitle: "Cancel")
+              @objc private func openRegionChooser(_ sender: Any?) {
+                  let alert = NSAlert()
+                  alert.messageText = "Polestar Sign-In Region"
+                  alert.informativeText =
+                      "Global keeps Hisingen's original Polestar sign-in. " +
+                      "China opens the official Polestar China website. " +
+                      "Website sign-in is not treated as a verified China vehicle API session."
+                  alert.addButton(withTitle: "Global Polestar ID")
+                  alert.addButton(withTitle: "China Polestar ID · Official Web Sign-In")
+                  alert.addButton(withTitle: "Cancel")
 
-        let result = alert.runModal()
-        if result == .alertFirstButtonReturn {
-            selectGlobal()
-        } else if result == .alertSecondButtonReturn {
-            selectChina()
-        }
-    }
+                  let result = alert.runModal()
+                  if result == .alertFirstButtonReturn {
+                      selectGlobal()
+                  } else if result == .alertSecondButtonReturn {
+                      selectChina()
+                  }
+              }
 
-    private func selectGlobal() {
-        UserDefaults.standard.set("global", forKey: Self.defaultsKey)
-        guard let root = NSApp.mainMenu else { return }
-        if let settings = findMenuItem(
-            in: root,
-            titles: ["Settings…", "Settings...", "Preferences…", "Preferences..."]
-        ), let action = settings.action {
-            _ = NSApp.sendAction(action, to: settings.target, from: settings)
-        }
-    }
+              private func selectGlobal() {
+                  UserDefaults.standard.set("global", forKey: Self.defaultsKey)
+                  guard let root = NSApp.mainMenu else { return }
+                  if let settings = findMenuItem(
+                      in: root,
+                      titles: ["Settings…", "Settings...", "Preferences…", "Preferences..."]
+                  ), let action = settings.action {
+                      _ = NSApp.sendAction(action, to: settings.target, from: settings)
+                  }
+              }
 
-    private func selectChina() {
-        UserDefaults.standard.set("chinaOfficialWeb", forKey: Self.defaultsKey)
-        openChinaWindow()
-    }
+              private func selectChina() {
+                  UserDefaults.standard.set("chinaOfficialWeb", forKey: Self.defaultsKey)
+                  openChinaWindow()
+              }
 
-    private func openChinaWindow() {
-        if let window = webWindow {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
+              private func openChinaWindow() {
+                  if let window = webWindow {
+                      window.makeKeyAndOrderFront(nil)
+                      NSApp.activate(ignoringOtherApps: true)
+                      return
+                  }
 
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
+                  let configuration = WKWebViewConfiguration()
+                  configuration.websiteDataStore = .default()
 
-        let view = WKWebView(
-            frame: NSRect(x: 0, y: 0, width: 720, height: 820),
-            configuration: configuration
-        )
-        view.navigationDelegate = self
+                  let view = WKWebView(
+                      frame: NSRect(x: 0, y: 0, width: 720, height: 820),
+                      configuration: configuration
+                  )
+                  view.navigationDelegate = self
 
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 820),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "China Polestar ID · Official Web Sign-In"
-        window.contentView = view
-        window.center()
-        window.isReleasedWhenClosed = false
+                  let window = NSWindow(
+                      contentRect: NSRect(x: 0, y: 0, width: 720, height: 820),
+                      styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                      backing: .buffered,
+                      defer: false
+                  )
+                  window.title = "China Polestar ID · Official Web Sign-In"
+                  window.contentView = view
+                  window.center()
+                  window.isReleasedWhenClosed = false
 
-        self.webView = view
-        self.webWindow = window
+                  self.webView = view
+                  self.webWindow = window
 
-        let url = URL(string: "https://www.polestar.cn/zh-cn/auth/login/")!
-        view.load(URLRequest(url: url))
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
+                  let url = URL(string: "https://www.polestar.cn/zh-cn/auth/login/")!
+                  view.load(URLRequest(url: url))
+                  window.makeKeyAndOrderFront(nil)
+                  NSApp.activate(ignoringOtherApps: true)
+              }
 
-    private func findMenuItem(in menu: NSMenu, titles: [String]) -> NSMenuItem? {
-        for item in menu.items {
-            if titles.contains(item.title) { return item }
-            if let submenu = item.submenu,
-               let found = findMenuItem(in: submenu, titles: titles) {
-                return found
-            }
-        }
-        return nil
-    }
-}
-SWIFT
+              private func findMenuItem(in menu: NSMenu, titles: [String]) -> NSMenuItem? {
+                  for item in menu.items {
+                      if titles.contains(item.title) { return item }
+                      if let submenu = item.submenu,
+                         let found = findMenuItem(in: submenu, titles: titles) {
+                          return found
+                      }
+                  }
+                  return nil
+              }
+          }
+          SWIFT
 
           python3 - <<'PY'
-from pathlib import Path
+          import os
+          from pathlib import Path
 
-path = Path("$RUNNER_TEMP/Hisingen/Sources/Hisingen/App/AppDelegate.swift")
-text = path.read_text(encoding="utf-8")
-needle = "        mainMenuController.install()\n"
-replacement = needle + "        ChinaPolestarRegionController.install()\n"
+          path = Path(os.environ["RUNNER_TEMP"]) / "Hisingen/Sources/Hisingen/App/AppDelegate.swift"
+          text = path.read_text(encoding="utf-8")
+          needle = "        mainMenuController.install()\n"
+          replacement = needle + "        ChinaPolestarRegionController.install()\n"
 
-if "ChinaPolestarRegionController.install()" not in text:
-    if needle not in text:
-        raise SystemExit("Could not find mainMenuController.install() in AppDelegate.swift")
-    text = text.replace(needle, replacement, 1)
-    path.write_text(text, encoding="utf-8")
+          if "ChinaPolestarRegionController.install()" not in text:
+              if needle not in text:
+                  raise SystemExit("Could not find mainMenuController.install() in AppDelegate.swift")
+              text = text.replace(needle, replacement, 1)
+              path.write_text(text, encoding="utf-8")
 
-print("China region hook installed")
-PY
+          print("China region hook installed")
+          PY
 
           grep -n "ChinaPolestarRegionController.install" \
             "$RUNNER_TEMP/Hisingen/Sources/Hisingen/App/AppDelegate.swift"
@@ -233,15 +235,14 @@ PY
           cd "$DIST"
           shasum -a 256 Hisingen-China.app.zip > SHA256SUMS.txt
 
-          cat > BUILD_INFO.txt <<INFO
-Hisingen upstream: v2.0.10
-Patch: China Polestar ID Official Web Sign-In fast build
-Runner: macos-15
-Xcode: $(xcodebuild -version | tr '\n' ' ')
-Regions: Global Polestar ID / China Polestar ID Official Web Sign-In
-China login: https://www.polestar.cn/zh-cn/auth/login/
-China vehicle API session: not verified by this website sign-in flow
-INFO
+          cat > BUILD_INFO.txt <<'INFO'
+          Hisingen upstream: v2.0.10
+          Patch: China Polestar ID Official Web Sign-In fast build
+          Runner: macos-15
+          Regions: Global Polestar ID / China Polestar ID Official Web Sign-In
+          China login: https://www.polestar.cn/zh-cn/auth/login/
+          China vehicle API session: not verified by this website sign-in flow
+          INFO
 
       - name: Upload macOS app
         uses: actions/upload-artifact@v4
